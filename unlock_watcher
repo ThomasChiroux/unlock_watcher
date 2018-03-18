@@ -1,0 +1,108 @@
+#!/usr/bin/env python
+"""unlock logging watcher.
+
+Uses a patched version of slock wich logs failed login attempt.
+Now monitor also failed login attempts on console
+
+This program looks at the log an take a webcam picture at each failed log
+attempt.
+it requires fswebcam package to make the capture.
+
+This module also requires the 'python-systemd' package
+
+config is stored in /etc/unlock_watcher.cfg
+
+content of config::
+
+    [user]
+    name = toto
+"""
+import configparser
+import os
+import select
+import subprocess
+import time
+
+from systemd import journal
+
+LOGFILE_SCREENERS = {'slock': {'fail_str': 'Failed unlock attempt',
+                               'ok_str': 'Unlocked'},
+                     'login': {'fail_str': 'authentication failure',
+                               'ok_str': 'LOGIN ON'}, }
+
+SNAPSHOT_CMD = 'fswebcam -r 1280x720 -S 3'
+
+EMERGENCY_THRESHOLD = 10
+EMERGENCY_CMD = 'poweroff'
+
+SLEEP_TIME = .1
+
+
+def main(user=''):
+    """Main program."""
+    OUTPUT_DIR = os.path.join('/home', user, '.failed_unlock_captures')
+    NOTIFY_CMD = ('sudo -u %s DISPLAY=:0 notify-send -u {urgency} '
+                  '-a "slock_watcher"' % user)
+
+    unlock_attempts = []
+
+    jnl = journal.Reader()
+    for ident in LOGFILE_SCREENERS:
+        jnl.add_match('SYSLOG_IDENTIFIER=%s' % ident)
+
+    jnl.seek_tail()
+    jnl.get_previous()
+
+    pol = select.poll()
+    pol.register(jnl, jnl.get_events())
+
+    while pol.poll():
+        if jnl.process() != journal.APPEND:
+            continue
+
+        for entry in jnl:
+            ident = entry['SYSLOG_IDENTIFIER']
+            # print(ident, "==>", entry['MESSAGE'])
+            if LOGFILE_SCREENERS[ident]['fail_str'] in entry['MESSAGE']:
+                # take a picture
+                unlock_attempts.append(time.time())
+                picture_name = ('unlock_watcher_' +
+                                entry['__REALTIME_TIMESTAMP'].isoformat() +
+                                "_" + entry['SYSLOG_IDENTIFIER'] +
+                                '.jpg')
+                cmd = SNAPSHOT_CMD.split(' ')
+                cmd.append(os.path.join(OUTPUT_DIR, picture_name))
+                subprocess.call(cmd)
+
+                if len(unlock_attempts) >= EMERGENCY_THRESHOLD:
+                    subprocess.call(EMERGENCY_CMD.split(' '))
+            elif LOGFILE_SCREENERS[ident]['ok_str'] in entry['MESSAGE']:
+                # if there was failed unlock, notify the user
+                if not unlock_attempts:
+                    continue
+
+                title = '{number} Failed Unlock while away'.format(
+                    number=len(unlock_attempts))
+                content = (
+                    'There was {number} failed unlock while '
+                    'away\n({last_min_number} since less than 1 minute)')
+                content = content.format(
+                    number=len(unlock_attempts),
+                    last_min_number=len([un for un in unlock_attempts
+                                         if un >= time.time() - 60]))
+
+                if len(unlock_attempts) >= 5:
+                    cmd = NOTIFY_CMD.format(urgency="critical").split(" ")
+                elif len(unlock_attempts) > 0:
+                    cmd = NOTIFY_CMD.format(urgency="normal").split(' ')
+                unlock_attempts.clear()
+                cmd.append(title)
+                cmd.append(content)
+                subprocess.call(cmd)
+
+
+if __name__ == '__main__':
+    config = configparser.ConfigParser()
+    config.read('/etc/unlock_watcher.cfg')
+    user = config['user']['name']
+    main(user)

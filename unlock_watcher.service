@@ -1,0 +1,8 @@
+[Unit]
+Description=Log Watcher for fail unlock attempts
+
+[Service]
+ExecStart=/usr/local/bin/unlock_watcher
+
+[Install]
+WantedBy=multi-user.target
