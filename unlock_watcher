@@ -32,18 +32,19 @@ LOGFILE_SCREENERS = {'slock': {'fail_str': 'Failed unlock attempt',
 
 SNAPSHOT_CMD = 'fswebcam -r 1280x720 -S 3'
 
-EMERGENCY_THRESHOLD = 10
+EMERGENCY_THRESHOLD = 7
 EMERGENCY_CMD = 'poweroff'
 
 SLEEP_TIME = .1
 
 
-def main(user=''):
+def main(user='', user_id=0):
     """Main program."""
     OUTPUT_DIR = os.path.join('/home', user, '.failed_unlock_captures')
-    NOTIFY_CMD = ('sudo -u %s DISPLAY=:0 notify-send -u {urgency} '
-                  '-a "slock_watcher"' % user)
-
+    NOTIFY_CMD = ('sudo -u %s DISPLAY=:0 '
+                  'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%s/bus '
+                  '/usr/bin/notify-send -u {urgency} '
+                  '-a "slock_watcher"' % (user, user_id))
     unlock_attempts = []
 
     jnl = journal.Reader()
@@ -105,4 +106,5 @@ if __name__ == '__main__':
     config = configparser.ConfigParser()
     config.read('/etc/unlock_watcher.cfg')
     user = config['user']['name']
-    main(user)
+    user_id = config['user']['id']
+    main(user, user_id)
